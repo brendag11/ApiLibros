@@ -7,7 +7,7 @@ namespace ApiLibros.Controllers
     [ApiController]
     [Route("api/categorias")]
 
-    public class CategoriasController : ControllerBase
+    public class CategoriasController: ControllerBase
     {
         private readonly ApplicationDbContext dbContext;
         public CategoriasController(ApplicationDbContext context)
