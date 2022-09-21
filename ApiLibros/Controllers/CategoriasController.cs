@@ -2,7 +2,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
-
 namespace ApiLibros.Controllers
 {
     [ApiController]
