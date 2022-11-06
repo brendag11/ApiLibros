@@ -1,63 +1,98 @@
-﻿using ApiLibros.Entidades;
+﻿using ApiLibros.DTOs;
+using ApiLibros.Entidades;
+using AutoMapper;
+using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
 namespace ApiLibros.Controllers
 {
     [ApiController]
-    [Route("api/categorias")]
+    [Route("categorias")]
 
-    public class CategoriasController: ControllerBase
+    public class CategoriasController : ControllerBase
     {
         private readonly ApplicationDbContext dbContext;
-        public CategoriasController(ApplicationDbContext context)
+        private readonly IMapper mapper;
+
+        public CategoriasController(ApplicationDbContext context, IMapper mapper)
         {
             this.dbContext = context;
+            this.mapper = mapper;
         }
 
         [HttpGet]
+        [HttpGet("/listadoCategoria")]
         public async Task<ActionResult<List<Categoria>>> GetAll()
         {
             return await dbContext.Categorias.ToListAsync();
         }
 
-        [HttpGet("{id:int}")]
-        public async Task<ActionResult<Categoria>> GetById(int id)
+        [HttpGet("{id:int}", Name = "obtenerCategoria")]
+        public async Task<ActionResult<CategoriaDTOConLibros>> GetById(int id)
         {
-            return await dbContext.Categorias.FirstOrDefaultAsync(x => x.Id == id);
+            var categoria = await dbContext.Categorias
+              .Include(categoriaDB => categoriaDB.LibroCategoria)
+              .ThenInclude(libroCategoriaDB => libroCategoriaDB.Libro)
+              .Include(seccionDB => seccionDB.Seccions)
+              .FirstOrDefaultAsync(x => x.Id == id);
+
+            if (categoria == null)
+            {
+                return NotFound();
+            }
+            categoria.LibroCategoria = categoria.LibroCategoria.OrderBy(x => x.Orden).ToList();
+            return mapper.Map<CategoriaDTOConLibros>(categoria);
         }
 
         [HttpPost]
-        public async Task<ActionResult> Post(Categoria categoria)
+        public async Task<ActionResult> Post(CategoriaCreacionDTO categoriaCreacionDTO)
         {
-            var existeLibro = await dbContext.Libros.AnyAsync(x => x.Id == categoria.LibroId);
-            if (!existeLibro)
+            if (categoriaCreacionDTO.LibrosIds == null)
             {
-                return BadRequest($"No existe el libro con el id: {categoria.LibroId}");
+                return BadRequest("No se puede crear una categoria sin libros.");
             }
+
+            var librosIds = await dbContext.Libros
+                .Where(libroBD => categoriaCreacionDTO.LibrosIds.Contains(libroBD.Id)).
+                Select(x => x.Id).ToListAsync();
+
+            if (categoriaCreacionDTO.LibrosIds.Count != librosIds.Count)
+            {
+                return BadRequest("No existe uno de los libros enviados");
+            }
+
+            var categoria = mapper.Map<Categoria>(categoriaCreacionDTO);
+
+            OrdenarPorAlumnos(categoria);
+
             dbContext.Add(categoria);
             await dbContext.SaveChangesAsync();
-            return Ok();
+
+            var categoriaDTO = mapper.Map<CategoriaDTO>(categoria);
+
+            return CreatedAtRoute("obtenerCategoria", new { id = categoria.Id }, categoriaDTO);
         }
 
         [HttpPut("{id:int}")]
-        public async Task<ActionResult> Put(Categoria categoria, int id)
+        public async Task<ActionResult> Put(CategoriaCreacionDTO categoriaCracionDTO, int id)
         {
-            var existe = await dbContext.Categorias.AnyAsync(x => x.Id == id);
-            if (!existe)
-            {
-                return NotFound("La categoria del libro especificada no existe.");
+            var categoriaDB = await dbContext.Categorias
+                  .Include(x => x.LibroCategoria)
+                  .FirstOrDefaultAsync(x => x.Id == id);
 
-            }
-            if (categoria.Id != id)
+            if (categoriaDB == null)
             {
-                return BadRequest("El id de la categoria no coincide con el establecido en la url .");
-
+                return NotFound();
             }
 
-            dbContext.Update(categoria);
+            categoriaDB = mapper.Map(categoriaCracionDTO, categoriaDB);
+
+            OrdenarPorAlumnos(categoriaDB);
+
             await dbContext.SaveChangesAsync();
-            return Ok();
+            return NoContent();
         }
 
         [HttpDelete("{id:int}")]
@@ -69,14 +104,48 @@ namespace ApiLibros.Controllers
                 return NotFound("El recurso no se ha encontrado");
             }
 
-            //var valideRelation = await dbContext.LibroClase.AnyAsync
-
             dbContext.Remove(new Categoria { Id = id });
             await dbContext.SaveChangesAsync();
             return Ok();
 
         }
+        private void OrdenarPorAlumnos(Categoria categoria)
+        {
+            if (categoria.LibroCategoria != null)
+            {
+                for (int i = 0; i < categoria.LibroCategoria.Count; i++)
 
+                {
+                    categoria.LibroCategoria[i].Orden = i;
+                }
+            }
+        }
 
+        [HttpPatch("{id:int}")]
+        public async Task<ActionResult> Patch(int id, JsonPatchDocument<CategoriaPatchDTO> patchDocument)
+        {
+            if (patchDocument == null) { return BadRequest(); }
+
+            var categoriaDB = await dbContext.Categorias.FirstOrDefaultAsync(x => x.Id == id);
+
+            if (categoriaDB == null) { return NotFound(); }
+
+            var categoriaDTO = mapper.Map<CategoriaPatchDTO>(categoriaDB);
+
+            patchDocument.ApplyTo(categoriaDTO);
+
+            var isValid = TryValidateModel(categoriaDTO);
+
+            if (!isValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            mapper.Map(categoriaDTO, categoriaDB);
+
+            await dbContext.SaveChangesAsync();
+            return NoContent();
+        }
     }
+
 }

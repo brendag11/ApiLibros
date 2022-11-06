@@ -1,137 +1,99 @@
-﻿using ApiLibros.Entidades;
-using ApiLibros.Filtros;
-using ApiLibros.Services;
+﻿using ApiLibros.DTOs;
+using ApiLibros.Entidades;
+using AutoMapper;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
-namespace ApiLibros.Controllers
+namespace ApiLibros.Controllers //El bueno
 {
     [ApiController]
-    [Route("api/libros")] // nombre de la ruta del controlador
-    //[Authorize]
-
+    [Route("libros")] // nombre de la ruta del controlador
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme, Policy = "EsAdmin")]
 
     public class LibrosController : ControllerBase
     {
         private readonly ApplicationDbContext dbContext;
-        private readonly IService service;
-        private readonly ServiceTransient serviceTransient;
-        private readonly ServiceScoped serviceScoped;
-        private readonly ServiceSingleton serviceSingleton;
-        private readonly ILogger <LibrosController>  logger;
-        private readonly IWebHostEnvironment env;
-      
-      
-        public LibrosController(ApplicationDbContext context, IService service, ServiceTransient serviceTransient,
-        ServiceScoped serviceScoped, ServiceSingleton serviceSingleton, ILogger<LibrosController> logger, IWebHostEnvironment env)
+        private readonly IMapper mapper;
+        private readonly IConfiguration configuration;
+
+        public LibrosController(ApplicationDbContext context, IMapper mapper, IConfiguration configuration)
         {
             this.dbContext = context;
-            this.service = service;
-            this.serviceTransient = serviceTransient;
-            this.serviceScoped = serviceScoped;
-            this.serviceSingleton = serviceSingleton;
-            this.logger = logger;
-            this.env = env;
-        }
-
-        [HttpGet("GUID")]
-        [ResponseCache(Duration = 10)]
-        [ServiceFilter(typeof(FiltroDeAccion))]
-        public ActionResult ObtenerGuid()
-        {
-
-            throw new NotImplementedException();
-            logger.LogInformation("Durante la ejecucion");
-            return Ok(new
-            {
-                LibrosControllerTransient = serviceTransient.guid,
-                ServiceA_Transient = service.GetTransient(),
-                LibrosControllerScoped = serviceScoped.guid,
-                ServiceA_Scoped = service.GetScoped(),
-                LibrosControllerSingleton = serviceSingleton.guid,
-                ServiceA_Singleton = service.GetSingleton()
-            });
+            this.mapper = mapper;
+            this.configuration = configuration;
         }
 
         [HttpGet] //api/libros
-        [HttpGet("listado")] //api/libros/listado
-        [HttpGet("/listado")] // /listado      Aquí se sobrescribe la ruta del controlador
-
-        //[ResponseCache(Duration = 15)]
-        //[Authorize]
-        //[ServiceFilter(typeof(FiltroDeAccion))]
-
-        public async Task<ActionResult<List<Libro>>> GetLibros()
+        [AllowAnonymous]
+        public async Task<ActionResult<List<GetLibroDTO>>> Get()
         {
-            throw new NotImplementedException();
-            logger.LogInformation("Se obtiene la lista del libro");
-            logger.LogWarning("Mensaje de prueba warning");
-            service.EjecutarJob();
-            return await dbContext.Libros.Include(x => x.categorias).ToListAsync();
+
+            var libros = await dbContext.Libros.ToListAsync();
+            return mapper.Map<List<GetLibroDTO>>(libros);
 
         }
 
-        [HttpGet("primero")] //api/libros/primero       
-        public async Task<ActionResult<Libro>> PrimerLibro([FromHeader] int valor, [FromQuery] string libro, [FromQuery] int libroid)
+        [HttpGet("{id:int}", Name = "obtenerlibro")] //{id}/libro 
+        public async Task<ActionResult<LibroDTOConCategorias>> Get(int id)
         {
-                return await dbContext.Libros.FirstOrDefaultAsync();
-        }
+            var libro = await dbContext.Libros
+                 .Include(libroDB => libroDB.LibroCategoria)
+                 .ThenInclude(libroCategoriaDB => libroCategoriaDB.Categoria)
+                 .FirstOrDefaultAsync(libroBD => libroBD.Id == id);
 
-        [HttpGet("{id:int}/{param?}")] //{id}/libro
-        public async Task<ActionResult<Libro>> Get(int id, string param)
-        {
-            var libro = await dbContext.Libros.FirstOrDefaultAsync(x => x.Id == id);
             if (libro == null)
             {
                 return NotFound();
             }
-            return libro;
+            return mapper.Map<LibroDTOConCategorias>(libro);
         }
 
 
-        [HttpGet("obtenerTitulo/{titulo}")] // libros/(titulo)
-        public async Task<ActionResult<Libro>> Get([FromRoute]string titulo)
+        [HttpGet("{titulo}")] // libros/(titulo)
+        public async Task<ActionResult<List<GetLibroDTO>>> Get([FromRoute] string titulo)
         {
-            var libro = await dbContext.Libros.FirstOrDefaultAsync(x => x.Titulo.Contains(titulo));
-            if (libro == null)
-            {
-                logger.LogError("No se encuentra el titulo ingresado. ");
-                return NotFound();
-            }
-
-            return libro;
+            var libros = await dbContext.Libros.Where(libroBD => libroBD.Titulo.Contains(titulo)).ToListAsync();
+            return mapper.Map<List<GetLibroDTO>>(libros);
         }
 
 
         [HttpPost]
-        public async Task<ActionResult> Post( [FromBody] Libro libro)
+        public async Task<ActionResult> Post([FromBody] LibroDTO libroDto)
         {
             // Ejemplo para validar desde eñ cpntrolador con la BD con ayuda de dcContext
 
-            var existeLibroMismoNombre = await dbContext.Libros.AnyAsync(x => x.Titulo == libro.Titulo);
+            var existeLibroMismoNombre = await dbContext.Libros.AnyAsync(x => x.Titulo == libroDto.Titulo);
             if (existeLibroMismoNombre)
             {
-                return BadRequest("Ya existe un libro con este mismo nombre");
+                return BadRequest($"Ya existe un libro con el nombre {libroDto.Titulo}");
             }
+            var libro = mapper.Map<Libro>(libroDto);
 
             dbContext.Add(libro);
             await dbContext.SaveChangesAsync();
-            return Ok();
+            var libroDTO = mapper.Map<GetLibroDTO>(libro);
+
+            return CreatedAtRoute("obtenerlibro", new { id = libro.Id }, libroDTO);
+
         }
 
         [HttpPut("{id:int}")] //api/libros/1
-        public async Task<ActionResult> Put(Libro libro, int id)
+        public async Task<ActionResult> Put(LibroDTO libroCreacionDTO, int id)
         {
-            if (libro.Id != id)
+            var exist = await dbContext.Libros.AnyAsync(x => x.Id == id);
+            if (!exist)
             {
-                return BadRequest("El id del libro no coincide con el establecido en el url");
-
+                return NotFound();
             }
+
+            var libro = mapper.Map<Libro>(libroCreacionDTO);
+            libro.Id = id;
 
             dbContext.Update(libro);
             await dbContext.SaveChangesAsync();
-            return Ok();
+            return NoContent();
         }
 
 
